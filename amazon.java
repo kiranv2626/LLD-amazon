@@ -618,168 +618,6 @@ class CashOnDeliveryPayment implements PaymentStrategy {
     }
 }
 
-// ========================== COUPON — DECORATOR PATTERN ==========================
-/*
-DD#16: COUPON DECORATOR — Why Decorator over Strategy or Simple Inheritance?
-
-THE PROBLEM: Coupons STACK. A user might apply:
-  1. 10% seasonal sale  →  $100 becomes $90
-  2. Flat $5 off coupon  →  $90 becomes $85
-  3. Another 20% loyalty discount  →  $85 becomes $68
-
-WHY DECORATOR:
-  - Coupons are COMPOSABLE — you wrap one around another, like layers
-  - Order of application MATTERS ($100 → 10% off → $5 off = $85, but $100 → $5 off → 10% = $85.5)
-  - You can add NEW coupon types without changing existing ones (Open/Closed Principle)
-  - Each decorator has a SINGLE responsibility: apply one discount
-
-WHY NOT these alternatives:
-  ALT 1: List<Coupon> with a loop: for(coupon : coupons) total = coupon.apply(total)
-         → Simpler but loses the chain's description/audit trail. Decorator gives you
-           getDescription() that shows the full chain: "Base($100) + 10% off + $5 flat"
-         → Also can't enforce max-discount rules WITHIN the chain easily
-
-  ALT 2: Strategy pattern (single PricingStrategy)
-         → Strategy picks ONE algorithm. Decorator COMPOSES multiple.
-           You can't stack strategies. Decorator is built for stacking.
-
-  ALT 3: Inheritance (SaleProduct extends Product, CouponProduct extends SaleProduct)
-         → Class explosion: 3 coupon types × 3 combinations = 9 subclasses.
-           Decorator gives you N combinations from N classes.
-
-INTERVIEW TALK: "Decorator is the GoF pattern designed for exactly this use case —
-                 adding behavior dynamically at runtime by wrapping objects.
-                 Each coupon wraps the previous pricing, and I can compose them
-                 in any order the business rules require."
-
-TRADEOFF: Decorator adds call-stack depth (each layer delegates to the next).
-          For 2-3 coupons this is negligible. For 100+ (unlikely), flatten to a loop.
-*/
-
-// Step 1: The Component interface — anything that can be priced
-interface PriceCalculator {
-    double getCost();          // final price after all discounts
-    String getDescription();   // audit trail of applied discounts
-}
-
-// Step 2: Concrete Component — the base price with NO discounts
-class BasePriceCalculator implements PriceCalculator {
-    private final double baseTotal;
-
-    BasePriceCalculator(double baseTotal) {
-        this.baseTotal = baseTotal;
-    }
-
-    @Override public double getCost() { return baseTotal; }
-    @Override public String getDescription() { return String.format("Base($%.2f)", baseTotal); }
-}
-
-// Step 3: Abstract Decorator — holds reference to wrapped component
-// This is the KEY structural piece — every coupon decorator wraps another PriceCalculator
-abstract class CouponDecorator implements PriceCalculator {
-    protected final PriceCalculator wrapped; // the inner layer we're decorating
-
-    CouponDecorator(PriceCalculator wrapped) {
-        this.wrapped = wrapped;
-    }
-}
-
-// Step 4: Concrete Decorators — each adds one type of discount
-
-// Percentage discount: "20% off" → multiplies by 0.8
-class PercentageCoupon extends CouponDecorator {
-    private final double percent; // e.g., 20.0 for 20% off
-    private final String label;
-
-    PercentageCoupon(PriceCalculator wrapped, double percent, String label) {
-        super(wrapped);
-        this.percent = percent;
-        this.label = label;
-    }
-
-    @Override
-    public double getCost() {
-        return wrapped.getCost() * (1 - percent / 100.0);
-    }
-
-    @Override
-    public String getDescription() {
-        return wrapped.getDescription() + String.format(" → %s(%.0f%% off)", label, percent);
-    }
-}
-
-// Flat discount: "$15 off" → subtracts fixed amount, floor at 0
-class FlatCoupon extends CouponDecorator {
-    private final double discount;
-    private final String label;
-
-    FlatCoupon(PriceCalculator wrapped, double discount, String label) {
-        super(wrapped);
-        this.discount = discount;
-        this.label = label;
-    }
-
-    @Override
-    public double getCost() {
-        return Math.max(0, wrapped.getCost() - discount); // never go below $0
-    }
-
-    @Override
-    public String getDescription() {
-        return wrapped.getDescription() + String.format(" → %s($%.2f off)", label, discount);
-    }
-}
-
-// Max-cap coupon: ensures total discount doesn't exceed a maximum
-// REAL-WORLD: Amazon caps maximum discount at some threshold
-class MaxDiscountCap extends CouponDecorator {
-    private final double maxDiscount; // max total discount allowed
-    private final double originalTotal;
-
-    MaxDiscountCap(PriceCalculator wrapped, double maxDiscount, double originalTotal) {
-        super(wrapped);
-        this.maxDiscount = maxDiscount;
-        this.originalTotal = originalTotal;
-    }
-
-    @Override
-    public double getCost() {
-        double discountedPrice = wrapped.getCost();
-        double totalDiscount = originalTotal - discountedPrice;
-        if (totalDiscount > maxDiscount) {
-            return originalTotal - maxDiscount; // cap the discount
-        }
-        return discountedPrice;
-    }
-
-    @Override
-    public String getDescription() {
-        return wrapped.getDescription() + String.format(" → MaxCap($%.2f max discount)", maxDiscount);
-    }
-}
-
-// ========================== HOW IT INTEGRATES WITH CHECKOUT ==========================
-/*
-USAGE IN CHECKOUT (see modified checkout method below):
-
-    double baseTotal = 250.0; // sum of all cart items
-
-    // Build the decorator chain — each wraps the previous
-    PriceCalculator pricing = new BasePriceCalculator(baseTotal);      // $250.00
-    pricing = new PercentageCoupon(pricing, 10, "SUMMER_SALE");        // $225.00
-    pricing = new FlatCoupon(pricing, 15, "WELCOME15");                // $210.00
-    pricing = new MaxDiscountCap(pricing, 50, baseTotal);              // cap: max $50 off → $200.00
-
-    double finalPrice = pricing.getCost();          // $200.00
-    String audit = pricing.getDescription();
-    // "Base($250.00) → SUMMER_SALE(10% off) → WELCOME15($15.00 off) → MaxCap($50.00 max discount)"
-
-KEY INSIGHT: The caller decides the ORDER of coupons. Business rules can enforce:
-  - Percentage coupons apply BEFORE flat coupons (standard in e-commerce)
-  - MaxDiscountCap is ALWAYS the outermost layer
-  - Only 1 percentage + 1 flat allowed (validated before building chain)
-*/
-
 // ========================== NOTIFICATION — OBSERVER PATTERN (R8) ==========================
 // R8: Notify on order/shipping status changes
 // SDE2 POINT: Observer pattern for extensible notification channels
@@ -953,49 +791,29 @@ class AmazonSystem {
 
     // ---- CHECKOUT (R4, R5, R6, R7) ----
     // DD#2: 4-Phase SAGA with compensating rollback — THE MOST IMPORTANT METHOD
-    // Phase1: Calculate → Phase1.5: Apply coupons → Phase2: Reserve (CAS) → Phase3: Pay → Phase4: Create Order
+    // Phase1: Calculate → Phase2: Reserve (CAS) → Phase3: Pay → Phase4: Create Order
     // DD#14: Price fetched NOW from catalog, not from cart (protects against price exploitation)
 
-    // Simple checkout — no coupons
     public Order checkout(User user, Address shippingAddress, PaymentMethod paymentMethod,
                           PaymentStrategy paymentStrategy) {
-        return checkoutWithCoupons(user, shippingAddress, paymentMethod, paymentStrategy, null);
-    }
-
-    // DD#16: Checkout with DECORATOR CHAIN for coupons
-    // Caller builds the chain: new PercentageCoupon(new FlatCoupon(base, ...), ...)
-    // Checkout just calls .getCost() on the outermost decorator — clean and simple
-    public Order checkoutWithCoupons(User user, Address shippingAddress, PaymentMethod paymentMethod,
-                                     PaymentStrategy paymentStrategy, PriceCalculator couponChain) {
         if (user.status == AccountStatus.BLOCKED) throw new IllegalStateException("Account blocked");
 
         Cart cart = user.getCart();
         Map<String, Integer> items = cart.getItems();
         if (items.isEmpty()) throw new IllegalStateException("Cart is empty");
 
-        // Phase 1: Calculate base total (DD#14: price from catalog, not cart snapshot)
-        double baseTotal = 0;
+        // Phase 1: Calculate total
+        double total = 0;
         List<Map.Entry<Product, Integer>> resolved = new ArrayList<>();
         for (Map.Entry<String, Integer> entry : items.entrySet()) {
             Product p = catalog.getById(entry.getKey());
             if (p == null) throw new IllegalStateException("Product " + entry.getKey() + " not found");
             resolved.add(Map.entry(p, entry.getValue()));
-            baseTotal += p.getBasePrice() * entry.getValue();
+            total += p.getBasePrice() * entry.getValue();
         }
 
-        // Phase 1.5: APPLY COUPON DECORATOR CHAIN (DD#16)
-        // If no coupons, use base total. Otherwise, caller has already built the chain.
-        double finalTotal;
-        if (couponChain != null) {
-            finalTotal = couponChain.getCost();
-            System.out.println("Coupon breakdown: " + couponChain.getDescription());
-        } else {
-            finalTotal = baseTotal;
-        }
-        System.out.println("Base: $" + String.format("%.2f", baseTotal) +
-                         " → Final: $" + String.format("%.2f", finalTotal));
-
-        // Phase 2: Reserve inventory atomically (all-or-nothing) — DD#1 CAS-based
+        // Phase 2: Reserve inventory atomically (all-or-nothing)
+        // CONCURRENCY: CAS-based. If any product fails, rollback all previous.
         List<Map.Entry<Product, Integer>> reserved = new ArrayList<>();
         try {
             for (Map.Entry<Product, Integer> entry : resolved) {
@@ -1005,25 +823,28 @@ class AmazonSystem {
                 reserved.add(entry);
             }
         } catch (IllegalStateException e) {
+            // Rollback already-reserved items
             for (Map.Entry<Product, Integer> r : reserved) {
                 r.getKey().incrementQuantity(r.getValue());
             }
             throw e;
         }
 
-        // Phase 3: Process payment with DISCOUNTED total
-        if (!paymentStrategy.pay(finalTotal)) {
+        // Phase 3: Process payment
+        if (!paymentStrategy.pay(total)) {
+            // Payment failed — rollback inventory
             for (Map.Entry<Product, Integer> r : reserved) {
                 r.getKey().incrementQuantity(r.getValue());
             }
             throw new IllegalStateException("Payment failed");
         }
 
-        // Phase 4: Create order with final discounted amount
-        Order order = new Order(user.getId(), items, shippingAddress, paymentMethod, finalTotal);
+        // Phase 4: Create order
+        Order order = new Order(user.getId(), items, shippingAddress, paymentMethod, total);
         orders.put(order.getId(), order);
         cart.clear();
 
+        // R8: Notify
         notificationService.publish(NotificationType.ORDER_PLACED, order, user);
         return order;
     }
@@ -1116,48 +937,6 @@ public class AmazonShoppingSystem {
         amazon.addReview(alice, laptop.getId(), "Great laptop!", 5);
         Product p = amazon.searchByName("laptop").get(0);
         System.out.println("\nLaptop avg rating: " + p.getAvgRating());
-
-        // ========================== COUPON DECORATOR DEMO ==========================
-        System.out.println("\n=== Coupon Decorator Demo ===");
-
-        // Scenario: User buys a $500 item with stacked coupons
-        Product tablet = amazon.addProduct(bob, "Tablet", "Pro tablet",
-                ProductCategory.ELECTRONICS, 500.00, 10);
-        User carol = amazon.registerUser("Carol", "carol@email.com", "5555555555", "pass");
-        carol.addAddress(new Address("456 Oak Ave", "Portland", "OR", "97201", "US"));
-        amazon.addToCart(carol, tablet.getId(), 1);
-
-        // BUILD THE DECORATOR CHAIN — this is the key interview talking point
-        // Each layer wraps the previous one, like Russian nesting dolls
-        //
-        //   Innermost → BasePriceCalculator($500.00)
-        //   Layer 1   → PercentageCoupon(10% off) → $450.00
-        //   Layer 2   → FlatCoupon($25 off)        → $425.00
-        //   Layer 3   → MaxDiscountCap($80 max)     → $420.00 (capped: discount was $75 < $80, no cap hit)
-        //
-        double baseTotal = 500.00;
-        PriceCalculator pricing = new BasePriceCalculator(baseTotal);
-        pricing = new PercentageCoupon(pricing, 10, "SUMMER_SALE");
-        pricing = new FlatCoupon(pricing, 25, "WELCOME25");
-        pricing = new MaxDiscountCap(pricing, 80, baseTotal);
-
-        // Verify the chain BEFORE checkout
-        System.out.println("Chain description: " + pricing.getDescription());
-        System.out.println("Chain final cost:  $" + String.format("%.2f", pricing.getCost()));
-
-        // Pass the pre-built chain into checkout
-        Order couponOrder = amazon.checkoutWithCoupons(carol, carol.getAddresses().get(0),
-                PaymentMethod.CREDIT_CARD, new CreditCardPayment("4111111111111234"), pricing);
-        System.out.println("Order total with coupons: $" + String.format("%.2f", couponOrder.getTotalAmount()));
-
-        // DEMO: What if discount exceeds cap?
-        System.out.println("\n--- MaxDiscountCap in action ---");
-        PriceCalculator aggressive = new BasePriceCalculator(500.00);
-        aggressive = new PercentageCoupon(aggressive, 40, "MEGA_SALE");  // $300 → $200 discount
-        aggressive = new FlatCoupon(aggressive, 50, "VIP50");            // $250 → $250 discount
-        aggressive = new MaxDiscountCap(aggressive, 100, 500.00);        // Cap at $100 off → $400
-        System.out.println("Aggressive coupons: " + aggressive.getDescription());
-        System.out.println("Without cap: $" + String.format("%.2f", 500 * 0.6 - 50) + " | With cap: $" + String.format("%.2f", aggressive.getCost()));
 
         // Concurrent checkout stress test
         System.out.println("\n=== Concurrent Checkout Test ===");
